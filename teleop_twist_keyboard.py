@@ -8,6 +8,7 @@ import roslib; roslib.load_manifest('teleop_twist_keyboard')
 import rospy
 
 from geometry_msgs.msg import Twist
+from std_msgs.msg import Float64
 
 import sys, select, termios, tty
 
@@ -33,6 +34,7 @@ anything else : stop
 q/z : increase/decrease max speeds by 10%
 w/x : increase/decrease only linear speed by 10%
 e/c : increase/decrease only angular speed by 10%
+a/d : increase/decrease joint angle
 
 CTRL-C to quit
 """
@@ -71,12 +73,14 @@ class PublishThread(threading.Thread):
     def __init__(self, rate):
         super(PublishThread, self).__init__()
         self.publisher = rospy.Publisher('cmd_vel', Twist, queue_size = 1)
+        self.publisher2 = rospy.Publisher('/husky_joint_controller/command', Float64, queue_size = 1)
         self.x = 0.0
         self.y = 0.0
         self.z = 0.0
         self.th = 0.0
         self.speed = 0.0
         self.turn = 0.0
+        self.angle = 0.0
         self.condition = threading.Condition()
         self.done = False
 
@@ -100,7 +104,7 @@ class PublishThread(threading.Thread):
         if rospy.is_shutdown():
             raise Exception("Got shutdown request before subscribers connected")
 
-    def update(self, x, y, z, th, speed, turn):
+    def update(self, x, y, z, th, speed, turn, angle):
         self.condition.acquire()
         self.x = x
         self.y = y
@@ -108,17 +112,19 @@ class PublishThread(threading.Thread):
         self.th = th
         self.speed = speed
         self.turn = turn
+        self.angle = angle
         # Notify publish thread that we have a new message.
         self.condition.notify()
         self.condition.release()
 
     def stop(self):
         self.done = True
-        self.update(0, 0, 0, 0, 0, 0)
+        self.update(0, 0, 0, 0, 0, 0, 0)
         self.join()
 
     def run(self):
         twist = Twist()
+        angle = Float64()
         while not self.done:
             self.condition.acquire()
             # Wait for a new message or timeout.
@@ -131,11 +137,12 @@ class PublishThread(threading.Thread):
             twist.angular.x = 0
             twist.angular.y = 0
             twist.angular.z = self.th * self.turn
-
+            angle.data = self.angle
             self.condition.release()
 
             # Publish.
             self.publisher.publish(twist)
+            self.publisher2.publish(angle)
 
         # Publish stop message when thread exits.
         twist.linear.x = 0
@@ -179,11 +186,12 @@ if __name__=="__main__":
     y = 0
     z = 0
     th = 0
+    angle = 0
     status = 0
 
     try:
         pub_thread.wait_for_subscribers()
-        pub_thread.update(x, y, z, th, speed, turn)
+        pub_thread.update(x, y, z, th, speed, turn,angle)
 
         print(msg)
         print(vels(speed,turn))
@@ -213,8 +221,15 @@ if __name__=="__main__":
                 th = 0
                 if (key == '\x03'):
                     break
- 
-            pub_thread.update(x, y, z, th, speed, turn)
+            
+            if key == 'a':
+                angle += 0.02
+                print("Joint angle:", angle)
+            elif key == 'd':
+                angle -= 0.02
+                print("Joint angle:", angle)
+            
+            pub_thread.update(x, y, z, th, speed, turn, angle)
 
     except Exception as e:
         print(e)
